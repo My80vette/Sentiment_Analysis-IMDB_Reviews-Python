@@ -11,21 +11,16 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 # This will use Huggingface to pull the relevant tokenizer for our preprocessing based on the one we select (DistilBERT)
 from transformers import AutoTokenizer
-
+import numpy as np
 # Load the IMDB dataset with metadata and labels
 data, info = tfds.load("imdb_reviews", with_info=True, as_supervised=True)
 
 # Now we will pull the data and split it up into 2 groups, training and testing data
 # The data object returned by tfds.load() has 2 keys, train and test
 data_train, data_test = data['train'], data['test']
-"""
-    This was used to see an example output to format the preprocessing function
-    example_batch = data_train.take(1) 
-    for example in tfds.as_numpy(example_batch):
-        print(example) 
-    print('above this')
-    exit(1)
-"""
+
+data_train = data_train.batch(32) 
+data_test = data_test.batch(32)
 
 
 """
@@ -57,25 +52,59 @@ def preprocess_text(review, label):
     encoded_review = tokenizer(review)
     return encoded_review
 
-# dataset.map is our workhorse, it applies the "preprocess_text" function to the entire dataset
-# "num_parallel_calls=tf.data.AUTOTUNE" is going to optimize the process by enabling parallelization
+
+# Define a function to preprocess a single text and its label.
+def preprocess_text(review, label):
+    # Define a function to decode a TensorFlow Tensor to a string.
+    def decode_review(review_tensor):
+        return review_tensor.numpy().decode('utf-8')
+    
+    # Use the tokenizer to encode the review.
+    encoded_review = tokenizer(review)
+    return encoded_review
+
+# Define a function to preprocess an entire dataset.
 def preprocess_dataset(dataset, batch_size=32):
-    dataset = dataset.batch(batch_size)
+
+    # Define a function to extract text and label from each example in the dataset.
     def extract_text_and_label(example, _):
-        raw_text = tf.numpy_function(tf.io.decode_raw, [example[0], tf.uint8], tf.string)  
-        text = tf.reshape(raw_text, ()) 
-        encoded_text = tokenizer(text.numpy().decode('utf-8'))  
-        return encoded_text['input_ids'], encoded_text['attention_mask'], example[1] 
+        # Extract the raw text from the example.
+        raw_text = example[0]
+        # Convert the raw text to a string.
+        text = tf.strings.as_string(raw_text)
+        # Reshape the text to ensure it's a 1D tensor.
+        text = tf.reshape(text, ())
+
+        # Define a function to tokenize the text using the tokenizer.
+        def tokenize_text(text):
+            return tokenizer(text.decode('utf-8'))
+
+        # Use tf.py_function to wrap the tokenization process, allowing it to execute eagerly.
+        encoded_text = tf.py_function(tokenize_text, [text], [tf.int32, tf.int32])
+        # Unpack the encoded text into input IDs and attention mask.
+        input_ids, attention_mask = encoded_text
+
+        # Ensure the tensors have the correct shape.
+        input_ids.set_shape([None])
+        attention_mask.set_shape([None])
+
+        # Return the input IDs, attention mask, and label as a tuple.
+        return input_ids, attention_mask, example[1]
+
+    # Apply the extract_text_and_label function to each example in the dataset.
     return dataset.map(extract_text_and_label, num_parallel_calls=tf.data.AUTOTUNE)
 
 
-# Lets preprocess the training and test data and return a tensorflow dataset
+# Preprocess the training and test data and return a TensorFlow dataset.
 preprocessed_data_train = preprocess_dataset(data_train)
 preprocessed_data_test = preprocess_dataset(data_test)
 
+# Print the first example from the preprocessed test dataset.
 print(preprocessed_data_test.take(1))
 
+# Take one example from the training dataset.
 example_batch = data_train.take(1)
-for example in example_batch.as_dict():  # Iterate to get a single dictionary
-    print(example) 
-    print(type(example)) 
+# Iterate over the example and print its contents and type.
+for example in example_batch:
+    print(example)
+    print(type(example))
